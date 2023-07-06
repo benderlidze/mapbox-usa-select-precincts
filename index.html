@@ -153,16 +153,53 @@
             })
             console.log('selected', selected);
 
-            const union = selected.reduce(
-                (accumulator, currentValue) => turf.union(accumulator, currentValue),
-                selected[0]
-            );
-
-            map.getSource('border').setData(union)
-
-            console.log('union', union);
+            console.log(new Date().getTime())
+            const start = new Date().getTime();
+            map.getSource('border').setData(fasterUnion(selected))
+            const end = new Date().getTime() - start
+            console.log(end, "ms");
 
         });
+
+        function fasterUnion(allGeometries) {
+            console.log('allGeometries.length', allGeometries.length);
+            const mid = Math.floor(allGeometries.length / 2);
+            let group1 = allGeometries.slice(0, mid);
+            let group2 = allGeometries.slice(mid);
+
+            while (group1.length > 1) {
+                group1 = unionGroup(group1);
+            }
+            while (group2.length > 1) {
+                group2 = unionGroup(group2);
+            }
+
+            let result;
+            if (group1.length === 1 && group2.length === 1) {
+                result = turf.union(group1[0], group2[0]);
+            } else if (group1.length === 1) {
+                result = group1[0];
+            } else {
+                result = group2[0];
+            }
+
+            return result;
+        }
+
+        function unionGroup(group) {
+            let newGroup = [];
+            for (let i = 0; i < group.length; i += 2) {
+                let a = group[i];
+                let b = i + 1 < group.length ? group[i + 1] : null;
+                if (b) {
+                    newGroup.push(turf.union(a, b));
+                } else {
+                    newGroup.push(a);
+                }
+            }
+            return newGroup;
+        }
+
 
         map.on('load', () => {
             Promise.all([

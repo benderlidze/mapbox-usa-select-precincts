@@ -204,8 +204,6 @@
                 }
             });
 
-
-
             //check the function execution 
             fetch("test.json")
                 .then(d => d.json())
@@ -213,12 +211,8 @@
                     map.getSource('states').setData(turf.featureCollection(json))
 
                     // map.getSource('border').setData(await fasterUnion(json))
-
-
                     console.log(new Date().getTime())
                     const start = new Date().getTime();
-                    
-                    console.log('json', json);
                     const tree = new RBush();
                     json.forEach((feature, id) => {
                         const [minX, minY, maxX, maxY] = turf.bbox(feature);
@@ -227,53 +221,39 @@
                             minY,
                             maxX,
                             maxY,
-                            id
+                            feature
                         });
                     });
-
-                    console.log('tree', tree);
-                    const poly = drillTree(tree)
-                    console.log('poly', poly);
+                    const poly = []
+                    drill(tree.data, poly)
                     const end = new Date().getTime() - start
                     console.log(end, "ms");
-
-                    map.getSource('poly').setData(turf.featureCollection(poly))
+                    map.getSource('poly').setData(fasterUnion(poly))
                 })
-
         });
 
-        function drillTree(tree) {
-            const polygons = []
-            const drill = (node) => {
-                if (node.children) {
-                    node.children.forEach(drill)
-                } else {
-                    //console.log('node', node);
-                    polygons.push(turf.polygon([[
-                        [node.minX, node.minY],
-                        [node.minX, node.maxY],
-                        [node.maxX, node.maxY],
-                        [node.maxX, node.minY],
-                        [node.minX, node.minY],
-                    ]]))
-                    return
+
+        const drill = (node, p) => {
+            if (node.children) {
+                node.children.forEach(n => drill(n, p))
+                if (node.height === 1) {
+                    const g = node.children.map(f => f.feature)
+                    const u = fasterUnion(g)
+                    p.push(u)
                 }
             }
-            drill(tree.data)
-            return polygons
         }
 
-        async function fasterUnion(allGeometries) {
-            console.log('allGeometries.length', allGeometries.length);
+        function fasterUnion(allGeometries) {
             const mid = Math.floor(allGeometries.length / 4);
             let group1 = allGeometries.slice(0, mid);
             let group2 = allGeometries.slice(mid);
 
             while (group1.length > 1) {
-                group1 = await unionGroup(group1);
+                group1 = unionGroup(group1);
             }
             while (group2.length > 1) {
-                group2 = await unionGroup(group2);
+                group2 = unionGroup(group2);
             }
 
             let result;
@@ -288,23 +268,17 @@
             return result;
         }
 
-        async function unionGroup(group) {
+        function unionGroup(group) {
             let newGroup = [];
             for (let i = 0; i < group.length; i += 2) {
                 let a = group[i];
                 let b = i + 1 < group.length ? group[i + 1] : null;
                 if (b) {
-                    // await sleep(500);
-                    // map.getSource('states').setData(turf.featureCollection([a, b]))
-                    // await sleep(500);
-                    // map.getSource('states').setData(turf.union(a, b))
                     newGroup.push(turf.union(a, b));
-                    // } 
                 } else {
                     newGroup.push(a);
                 }
             }
-
             return newGroup;
         }
 

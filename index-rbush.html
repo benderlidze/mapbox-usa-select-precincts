@@ -93,7 +93,6 @@
     <div id="info"></div>
     <div id="map"></div>
     <script>
-
         const infoDiv = document.getElementById("info")
         const tootltip = document.getElementById("tootltip")
 
@@ -136,26 +135,77 @@
             }, 100)//To prevent immediate click selection event map.on('click', 'states-fills'.....
         })
 
+        map.on('draw.create', function (feature, event) {
+
+            const polygon = feature.features[0]
+            draw.deleteAll()
+
+            //turf contains function
+            const selected = mainData.polygons.filter(d => {
+                if (!d.geometry) return false
+                if (turf.getType(d) === "MultiPolygon") {
+                    const coords = turf.coordAll(d)
+                    return coords.every(p => {
+                        const point = turf.point(p)
+                        return turf.booleanContains(polygon, point)
+                    })
+                }
+                return turf.booleanContains(polygon, d)
+            })
+            console.log('selected', selected);
+
+
+            const start = new Date().getTime();
+            const tree = new RBush();
+            selected.forEach((feature, id) => {
+                const [minX, minY, maxX, maxY] = turf.bbox(feature);
+                tree.insert({
+                    minX,
+                    minY,
+                    maxX,
+                    maxY,
+                    feature
+                });
+            });
+            const poly = []
+            drill(tree.data, poly)
+            const end = new Date().getTime() - start
+            const union = fasterUnion(poly)
+            console.log(end, "ms");
+            map.getSource('border').setData(union)
+
+
+        });
 
         map.on('load', () => {
+            Promise.all([
+                fetch('GAprecincts.geojson').then(d => d.json()),
+            ]).then(data => {
 
+                console.log('data', data);
+                map.getSource('states').setData(data[0])
+                mainData.polygons = data[0].features
+            })
 
-            map.addSource('poly', {
+            map.addSource('states', {
                 'type': 'geojson',
                 'data': { type: 'FeatureCollection', features: Array(0) }
             });
             map.addLayer({
-                'id': 'polyborder',
-                'type': 'line',
-                'source': 'poly',
+                'id': 'states-fills',
+                'type': 'fill',
+                'source': 'states',
                 'layout': {},
                 'paint': {
-                    'line-color': 'green',
-                    'line-width': 2
+                    'fill-color': ['get', 'color'],
+                    'fill-opacity': [
+                        'case',
+                        ['boolean', ['feature-state', 'hover'], false],
+                        0.8,
+                        0.3
+                    ]
                 }
             });
-            //add fill
-
 
             map.addSource('border', {
                 'type': 'geojson',
@@ -184,96 +234,31 @@
             });
 
 
-            map.addSource('states', {
-                'type': 'geojson',
-                'data': { type: 'FeatureCollection', features: Array(0) }
-            });
-            map.addLayer({
-                'id': 'states-fills',
-                'type': 'fill',
-                'source': 'states',
-                'layout': {},
-                'paint': {
-                    'fill-color': ['get', 'color'],
-                    'fill-opacity': [
-                        'case',
-                        ['boolean', ['feature-state', 'hover'], false],
-                        0.8,
-                        0.3
-                    ]
-                }
-            });
-
-
-
-            //check the function execution 
-            fetch("test.json")
-                .then(d => d.json())
-                .then(async (json) => {
-                    map.getSource('states').setData(turf.featureCollection(json))
-
-                    // map.getSource('border').setData(await fasterUnion(json))
-
-
-                    console.log(new Date().getTime())
-                    const start = new Date().getTime();
-                    
-                    console.log('json', json);
-                    const tree = new RBush();
-                    json.forEach((feature, id) => {
-                        const [minX, minY, maxX, maxY] = turf.bbox(feature);
-                        tree.insert({
-                            minX,
-                            minY,
-                            maxX,
-                            maxY,
-                            id
-                        });
-                    });
-
-                    console.log('tree', tree);
-                    const poly = drillTree(tree)
-                    console.log('poly', poly);
-                    const end = new Date().getTime() - start
-                    console.log(end, "ms");
-
-                    map.getSource('poly').setData(turf.featureCollection(poly))
-                })
 
         });
 
-        function drillTree(tree) {
-            const polygons = []
-            const drill = (node) => {
-                if (node.children) {
-                    node.children.forEach(drill)
-                } else {
-                    //console.log('node', node);
-                    polygons.push(turf.polygon([[
-                        [node.minX, node.minY],
-                        [node.minX, node.maxY],
-                        [node.maxX, node.maxY],
-                        [node.maxX, node.minY],
-                        [node.minX, node.minY],
-                    ]]))
-                    return
+
+        const drill = (node, p) => {
+            if (node.children) {
+                node.children.forEach(n => drill(n, p))
+                if (node.height === 1) {
+                    const g = node.children.map(f => f.feature)
+                    const u = fasterUnion(g)
+                    p.push(u)
                 }
             }
-            drill(tree.data)
-            return polygons
         }
 
-        async function fasterUnion(allGeometries) {
-            console.log('allGeometries.length', allGeometries.length);
+        function fasterUnion(allGeometries) {
             const mid = Math.floor(allGeometries.length / 4);
             let group1 = allGeometries.slice(0, mid);
             let group2 = allGeometries.slice(mid);
 
             while (group1.length > 1) {
-                group1 = await unionGroup(group1);
+                group1 = unionGroup(group1);
             }
             while (group2.length > 1) {
-                group2 = await unionGroup(group2);
+                group2 = unionGroup(group2);
             }
 
             let result;
@@ -288,37 +273,22 @@
             return result;
         }
 
-        async function unionGroup(group) {
+        function unionGroup(group) {
             let newGroup = [];
             for (let i = 0; i < group.length; i += 2) {
                 let a = group[i];
                 let b = i + 1 < group.length ? group[i + 1] : null;
                 if (b) {
-                    // await sleep(500);
-                    // map.getSource('states').setData(turf.featureCollection([a, b]))
-                    // await sleep(500);
-                    // map.getSource('states').setData(turf.union(a, b))
                     newGroup.push(turf.union(a, b));
-                    // } 
                 } else {
                     newGroup.push(a);
                 }
             }
-
             return newGroup;
         }
 
-
-        //await for 500ms
-        function sleep(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
-
-
-
-
     </script>
+
 </body>
 
 </html>
