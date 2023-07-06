@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Add a polygon to a map using a GeoJSON source</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.11.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.11.0/mapbox-gl.js"></script>
+    <script src="https://d3js.org/topojson.v1.min.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Load the `mapbox-gl-geocoder` plugin. -->
+    <!-- <script
+        src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.min.js"></script>
+    <link rel="stylesheet"
+        href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.css"
+        type="text/css"> -->
+
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+    <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.0/mapbox-gl-draw.js"></script>
+    <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.0/mapbox-gl-draw.css"
+        type="text/css">
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: white;
+            padding: 10px;
+            z-index: 1;
+            max-width: 300px;
+            max-height: 200px;
+            overflow: auto;
+        }
+
+        .bubble {
+            height: 40px;
+            background: gray;
+            color: #fff;
+            position: absolute;
+            width: 186px;
+            text-align: center;
+            line-height: 40px;
+            z-index: 10;
+            right: 65px;
+            top: 6px;
+        }
+
+        .bubble:after {
+            content: "";
+            position: absolute;
+            height: 0;
+            width: 0;
+            left: 100%;
+            top: 0;
+            border: 20px solid transparent;
+            border-left: 20px solid gray;
+        }
+
+        #test {
+            position: absolute;
+            top: 20;
+            bottom: 10;
+
+            z-index: 100;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="test">
+        <button id="send-data">Send data</button>
+        <button id="get-data">Get data</button>
+    </div>
+
+    <div class="bubble" id="tootltip">Select by polygon</div>
+    <div id="info"></div>
+    <div id="map"></div>
+    <script>
+        const infoDiv = document.getElementById("info")
+        const tootltip = document.getElementById("tootltip")
+
+        const sendData = document.getElementById("send-data")
+        const getData = document.getElementById("get-data")
+
+        const mainData = {
+            polygons: [],
+        }
+        const hoverStates = {
+            hoveredStateId: null,
+            hoveredCountyId: null,
+            hoveredPrecinctId: null,
+        }
+
+        mapboxgl.accessToken = 'pk.eyJ1IjoiaG9tZXZpc2l0bmV0d29yayIsImEiOiJjbGVlYXZzN3owNWttNDRtdmxlYzB6cTRmIn0.cShmIUJUL59Bb5US4Lxmuw';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/light-v11',
+            center: { lng: -84.15039442802453, lat: 33.767098707843346 },
+            zoom: 9,
+            projection: "mercator"
+        });
+
+
+        const draw = new MapboxDraw({
+            displayControlsDefault: false,
+            controls: {
+                polygon: true,
+                trash: false
+            },
+            // defaultMode: 'draw_polygon'
+        });
+        map.addControl(draw, 'top-right');
+        map.on('draw.modechange', function (feature) {
+            tootltip.style.display = "none"
+            //if in draw mode disable mouse selection
+            setTimeout(() => {
+                mainData.disableMouseSelection = feature.mode === 'draw_polygon'
+            }, 100)//To prevent immediate click selection event map.on('click', 'states-fills'.....
+        })
+
+        map.on('draw.create', function (feature, event) {
+
+            const polygon = feature.features[0]
+            draw.deleteAll()
+
+            //turf contains function
+            const selected = mainData.polygons.filter(d => {
+                if (!d.geometry) return false
+                if (turf.getType(d) === "MultiPolygon") {
+                    const coords = turf.coordAll(d)
+                    return coords.every(p => {
+                        const point = turf.point(p)
+                        return turf.booleanContains(polygon, point)
+                    })
+                }
+                return turf.booleanContains(polygon, d)
+            })
+            console.log('selected', selected);
+
+            const union = selected.reduce(
+                (accumulator, currentValue) => turf.union(accumulator, currentValue),
+                selected[0]
+            );
+
+            map.getSource('border').setData(union)
+
+            console.log('union', union);
+
+        });
+
+        map.on('load', () => {
+            Promise.all([
+                fetch('GAprecincts.geojson').then(d => d.json()),
+            ]).then(data => {
+
+                console.log('data', data);
+                map.getSource('states').setData(data[0])
+                mainData.polygons = data[0].features
+            })
+
+            map.addSource('states', {
+                'type': 'geojson',
+                'data': { type: 'FeatureCollection', features: Array(0) }
+            });
+            map.addLayer({
+                'id': 'states-fills',
+                'type': 'fill',
+                'source': 'states',
+                'layout': {},
+                'paint': {
+                    'fill-color': ['get', 'color'],
+                    'fill-opacity': [
+                        'case',
+                        ['boolean', ['feature-state', 'hover'], false],
+                        0.8,
+                        0.3
+                    ]
+                }
+            });
+
+            map.addSource('border', {
+                'type': 'geojson',
+                'data': { type: 'FeatureCollection', features: Array(0) }
+            });
+            map.addLayer({
+                'id': 'border',
+                'type': 'line',
+                'source': 'border',
+                'layout': {},
+                'paint': {
+                    'line-color': 'black',
+                    'line-width': 2
+                }
+            });
+            //add fill
+            map.addLayer({
+                'id': 'states-fills-hover',
+                'type': 'fill',
+                'source': 'border',
+                'layout': {},
+                'paint': {
+                    'fill-color': 'red',
+                    'fill-opacity': 0.8
+                },
+            });
+
+
+
+        });
+
+
+
+
+    </script>
+
+</body>
+
+</html>
